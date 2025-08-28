@@ -130,7 +130,13 @@ def create_chart(df, ticker, name, timeframe='1d'):
             decreasing_line_color='#FF6B6B',
             increasing_fillcolor='rgba(0, 212, 170, 0.1)',
             decreasing_fillcolor='rgba(255, 107, 107, 0.1)',
-            showlegend=False
+            showlegend=False,
+            hovertemplate='<b>%{x}</b><br>' +
+                         '始値: ¥%{open:,.0f}<br>' +
+                         '高値: ¥%{high:,.0f}<br>' +
+                         '安値: ¥%{low:,.0f}<br>' +
+                         '終値: ¥%{close:,.0f}<br>' +
+                         '<extra></extra>'
         ),
         row=1, col=1
     )
@@ -144,7 +150,11 @@ def create_chart(df, ticker, name, timeframe='1d'):
                 mode='lines',
                 name='VWAP',
                 line=dict(color='#FFD93D', width=2),
-                showlegend=False
+                showlegend=False,
+                hovertemplate='<b>VWAP</b><br>' +
+                             '日時: %{x}<br>' +
+                             '価格: ¥%{y:,.0f}<br>' +
+                             '<extra></extra>'
             ),
             row=1, col=1
         )
@@ -158,7 +168,8 @@ def create_chart(df, ticker, name, timeframe='1d'):
                 mode='lines',
                 name='VWAP+2σ',
                 line=dict(color='rgba(255, 107, 107, 0.6)', width=1, dash='dot'),
-                showlegend=False
+                showlegend=False,
+                hoverinfo='skip'
             ),
             row=1, col=1
         )
@@ -172,7 +183,8 @@ def create_chart(df, ticker, name, timeframe='1d'):
                 line=dict(color='rgba(255, 107, 107, 0.6)', width=1, dash='dot'),
                 fill='tonexty',
                 fillcolor='rgba(255, 107, 107, 0.05)',
-                showlegend=False
+                showlegend=False,
+                hoverinfo='skip'
             ),
             row=1, col=1
         )
@@ -186,7 +198,8 @@ def create_chart(df, ticker, name, timeframe='1d'):
                 mode='lines',
                 name='VWAP+1σ',
                 line=dict(color='rgba(106, 90, 205, 0.8)', width=1, dash='dash'),
-                showlegend=False
+                showlegend=False,
+                hoverinfo='skip'
             ),
             row=1, col=1
         )
@@ -200,7 +213,8 @@ def create_chart(df, ticker, name, timeframe='1d'):
                 line=dict(color='rgba(106, 90, 205, 0.8)', width=1, dash='dash'),
                 fill='tonexty',
                 fillcolor='rgba(106, 90, 205, 0.1)',
-                showlegend=False
+                showlegend=False,
+                hoverinfo='skip'
             ),
             row=1, col=1
         )
@@ -216,7 +230,11 @@ def create_chart(df, ticker, name, timeframe='1d'):
             name="出来高",
             marker_color=colors,
             opacity=0.7,
-            showlegend=False
+            showlegend=False,
+            hovertemplate='<b>出来高</b><br>' +
+                         '日時: %{x}<br>' +
+                         '出来高: %{y:,}<br>' +
+                         '<extra></extra>'
         ),
         row=2, col=1
     )
@@ -263,15 +281,6 @@ def create_chart(df, ticker, name, timeframe='1d'):
         gridwidth=0.5, 
         gridcolor='rgba(128,128,128,0.2)',
         row=2, col=1
-    )
-
-    # ホバー設定
-    fig.update_traces(
-        hovertemplate='<b>%{fullData.name}</b><br>' +
-                     '日時: %{x}<br>' +
-                     '価格: %{y:,.0f}<br>' +
-                     '<extra></extra>',
-        row=1, col=1
     )
 
     return fig
@@ -484,5 +493,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

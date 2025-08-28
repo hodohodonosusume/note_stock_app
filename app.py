@@ -4,12 +4,10 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 from datetime import datetime, timedelta
-import warnings
-warnings.filterwarnings('ignore')
 
 # ページ設定
 st.set_page_config(
-    page_title="📈 Stock Analysis Dashboard",
+    page_title="📈 Stock Chart Analyzer",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -18,257 +16,141 @@ st.set_page_config(
 # カスタムCSS
 st.markdown("""
 <style>
-    .main-header {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        padding: 2rem;
-        border-radius: 10px;
-        margin-bottom: 2rem;
+    .main > div {
+        padding-top: 2rem;
     }
-    .main-header h1 {
-        color: white;
-        text-align: center;
-        margin: 0;
-        font-size: 2.5rem;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-    }
-    .metric-container {
-        background: white;
-        padding: 1rem;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        border-left: 4px solid #667eea;
-    }
-    .stSelectbox > div > div {
+    .stSelectbox > div > div > div {
         background-color: #f0f2f6;
-        border-radius: 8px;
+        border-radius: 10px;
+    }
+    .css-1d391kg {
+        background-color: #ffffff;
+    }
+    .sidebar .sidebar-content {
+        background-color: #f8f9fa;
+    }
+    h1 {
+        color: #2E86AB;
+        text-align: center;
+        padding: 1rem 0;
+        border-bottom: 2px solid #2E86AB;
+        margin-bottom: 2rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
 @st.cache_data
 def load_data():
-    """CSVデータを読み込み（自動カラム検出付き）"""
+    """データを読み込む"""
     try:
-        # CSVファイルを読み込み
-        df = pd.read_csv('data_j.csv', encoding='utf-8')
+        df = pd.read_csv('data_j.csv')
+        df['Date'] = pd.to_datetime(df['Date'])
         
-        # デバッグ情報を表示
-        st.sidebar.markdown("### 📋 CSVファイル情報")
-        st.sidebar.write(f"**カラム数**: {len(df.columns)}")
-        st.sidebar.write(f"**行数**: {len(df)}")
-        st.sidebar.write("**カラム名**:")
-        for i, col in enumerate(df.columns):
-            st.sidebar.write(f"{i+1}. `{col}`")
+        # 休日（土日）を削除
+        df = df[df['Date'].dt.dayofweek < 5].copy()
         
-        # 日付カラムを自動検出
-        date_column = None
-        possible_date_names = ['Date', 'date', 'DATE', '日付', 'Timestamp', 'timestamp', 'Time', 'time']
-        
-        for col in df.columns:
-            if col in possible_date_names:
-                date_column = col
-                break
-        
-        # 日付カラムが見つからない場合、最初のカラムを使用
-        if date_column is None:
-            date_column = df.columns
-            st.warning(f"日付カラムが見つかりません。'{date_column}'を日付として使用します。")
-        
-        # 日付カラムを変換
-        try:
-            df[date_column] = pd.to_datetime(df[date_column])
-        except:
-            st.error(f"'{date_column}'カラムを日付に変換できませんでした。")
-            return None
-        
-        # 標準カラム名にリネーム
-        df = df.rename(columns={date_column: 'Date'})
-        
-        # 価格カラムを自動検出
-        price_column = None
-        possible_price_names = ['Price', 'price', 'PRICE', '価格', 'Close', 'close', 'CLOSE', '終値']
-        
-        for col in df.columns:
-            if col in possible_price_names:
-                price_column = col
-                break
-        
-        if price_column is None:
-            # 数値カラムから最初のものを選択
-            numeric_cols = df.select_dtypes(include=[np.number]).columns
-            if len(numeric_cols) > 0:
-                price_column = numeric_cols
-                st.warning(f"価格カラムが見つかりません。'{price_column}'を価格として使用します。")
-            else:
-                st.error("数値カラムが見つかりません。")
-                return None
-        
-        # 標準カラム名にリネーム
-        if price_column != 'Price':
-            df = df.rename(columns={price_column: 'Price'})
-        
-        # ボリュームカラムを自動検出（オプション）
-        volume_column = None
-        possible_volume_names = ['Volume', 'volume', 'VOLUME', '出来高', 'Vol', 'vol']
-        
-        for col in df.columns:
-            if col in possible_volume_names:
-                volume_column = col
-                break
-        
-        if volume_column is None:
-            # ボリュームがない場合はダミーデータを作成
-            df['Volume'] = 1000000  # 固定値
-            st.info("出来高カラムが見つかりません。固定値を使用します。")
-        else:
-            df = df.rename(columns={volume_column: 'Volume'})
-        
-        # VWAPカラムを自動検出（オプション）
-        vwap_column = None
-        possible_vwap_names = ['VWAP', 'vwap', 'Vwap']
-        
-        for col in df.columns:
-            if col in possible_vwap_names:
-                vwap_column = col
-                break
-        
-        if vwap_column is None:
-            # VWAPがない場合は価格をベースに計算
-            df['VWAP'] = df['Price']
-            st.info("VWAPカラムが見つかりません。価格をベースに使用します。")
-        else:
-            df = df.rename(columns={vwap_column: 'VWAP'})
-        
-        # 休日・土日を除外してデータを詰める
-        df = df.dropna(subset=['Price'])  # 価格がNaNの行を削除
-        df = df.reset_index(drop=True)
-        
-        st.sidebar.success("✅ データ読み込み完了!")
+        df = df.sort_values('Date').reset_index(drop=True)
         return df
-        
-    except FileNotFoundError:
-        st.error("❌ data_j.csvファイルが見つかりません。GitHubリポジトリにファイルがアップロードされているか確認してください。")
-        return None
     except Exception as e:
-        st.error(f"❌ データ読み込みエラー: {str(e)}")
-        st.markdown("### 🔍 トラブルシューティング")
-        st.markdown("""
-        1. **ファイル名を確認**: `data_j.csv`が正しい名前か確認
-        2. **エンコーディングを変更**: CSVファイルがUTF-8で保存されているか確認
-        3. **カラム名を確認**: 日付、価格、出来高のカラム名を確認
-        """)
+        st.error(f"データの読み込みに失敗しました: {e}")
         return None
 
 def resample_data(df, timeframe):
-    """指定された時間足にリサンプリング"""
-    df_copy = df.copy()
-    df_copy.set_index('Date', inplace=True)
+    """データを指定された時間軸にリサンプル"""
+    if timeframe == "5分足":
+        # 5分足の場合は元データをそのまま使用（実際のアプリでは5分足データが必要）
+        return df
     
-    if timeframe == '5分足':
-        freq = '5T'
-    elif timeframe == '日足':
-        freq = 'D'
-    elif timeframe == '週足':
-        freq = 'W'
-    elif timeframe == '月足':
-        freq = 'M'
+    df_resampled = df.set_index('Date')
+    
+    if timeframe == "日足":
+        rule = 'D'
+    elif timeframe == "週足":
+        rule = 'W'
+    elif timeframe == "月足":
+        rule = 'M'
     else:
-        return df_copy.reset_index()
+        rule = 'D'
     
-    # OHLC形式にリサンプル
-    resampled = df_copy.resample(freq).agg({
-        'Price': ['first', 'max', 'min', 'last'],
+    # OHLCV データのリサンプル
+    resampled = df_resampled.resample(rule).agg({
+        'Open': 'first',
+        'High': 'max',
+        'Low': 'min',
+        'Close': 'last',
         'Volume': 'sum',
         'VWAP': 'mean'
     }).dropna()
     
-    # カラム名を整理
-    resampled.columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'VWAP']
-    resampled = resampled.reset_index()
-    
-    return resampled
+    return resampled.reset_index()
 
-def calculate_vwap_bands(df, period=20):
+def calculate_vwap_bands(df, window=20):
     """VWAPバンドを計算"""
     df = df.copy()
     
     # 移動平均VWAP
-    df['VWAP_MA'] = df['VWAP'].rolling(window=period).mean()
+    df['VWAP_MA'] = df['VWAP'].rolling(window=window).mean()
     
-    # 標準偏差を計算
-    df['VWAP_STD'] = df['VWAP'].rolling(window=period).std()
+    # 標準偏差
+    df['VWAP_std'] = df['VWAP'].rolling(window=window).std()
     
-    # 1σと2σバンド
-    df['VWAP_Upper_1'] = df['VWAP_MA'] + df['VWAP_STD']
-    df['VWAP_Lower_1'] = df['VWAP_MA'] - df['VWAP_STD']
-    df['VWAP_Upper_2'] = df['VWAP_MA'] + (df['VWAP_STD'] * 2)
-    df['VWAP_Lower_2'] = df['VWAP_MA'] - (df['VWAP_STD'] * 2)
+    # 1σ、2σバンド
+    df['VWAP_upper_1sigma'] = df['VWAP_MA'] + df['VWAP_std']
+    df['VWAP_lower_1sigma'] = df['VWAP_MA'] - df['VWAP_std']
+    df['VWAP_upper_2sigma'] = df['VWAP_MA'] + 2 * df['VWAP_std']
+    df['VWAP_lower_2sigma'] = df['VWAP_MA'] - 2 * df['VWAP_std']
     
     return df
 
-def create_advanced_chart(df, timeframe):
-    """高機能なインタラクティブチャートを作成"""
+def create_chart(df, timeframe):
+    """インタラクティブチャートを作成"""
     
     # VWAPバンドを計算
     df = calculate_vwap_bands(df)
     
-    # サブプロット作成（価格チャート + ボリューム）
+    # サブプロットを作成（価格チャート + 出来高）
     fig = make_subplots(
         rows=2, cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.03,
-        subplot_titles=('', ''),
+        vertical_spacing=0.1,
+        subplot_titles=None,
         row_width=[0.7, 0.3]
     )
     
-    # カラーパレット（おしゃれな色）
+    # カラーパレット
     colors = {
-        'candle_up': '#26a69a',
-        'candle_down': '#ef5350', 
-        'vwap': '#ff9800',
-        'band_1': 'rgba(103, 126, 234, 0.3)',
-        'band_2': 'rgba(103, 126, 234, 0.15)',
-        'volume': '#9c27b0'
+        'candle_up': '#26A69A',
+        'candle_down': '#EF5350',
+        'vwap': '#FF6B35',
+        'vwap_1sigma': '#4ECDC4',
+        'vwap_2sigma': '#95E1D3',
+        'volume': '#A8DADC'
     }
     
-    # ローソク足チャート
-    if timeframe != '日足' or 'Open' in df.columns:
-        fig.add_trace(
-            go.Candlestick(
-                x=df['Date'] if 'Date' in df.columns else df.index,
-                open=df['Open'] if 'Open' in df.columns else df['Price'],
-                high=df['High'] if 'High' in df.columns else df['Price'],
-                low=df['Low'] if 'Low' in df.columns else df['Price'],
-                close=df['Close'] if 'Close' in df.columns else df['Price'],
-                name='Price',
-                increasing_line_color=colors['candle_up'],
-                decreasing_line_color=colors['candle_down'],
-                showlegend=False
-            ),
-            row=1, col=1
-        )
-    else:
-        # 日足の場合は線グラフ
-        fig.add_trace(
-            go.Scatter(
-                x=df['Date'],
-                y=df['Price'],
-                mode='lines',
-                name='Price',
-                line=dict(color=colors['candle_up'], width=2),
-                showlegend=False
-            ),
-            row=1, col=1
-        )
+    # ローソク足
+    fig.add_trace(
+        go.Candlestick(
+            x=df['Date'],
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
+            name="",
+            increasing_line_color=colors['candle_up'],
+            decreasing_line_color=colors['candle_down'],
+            showlegend=False
+        ),
+        row=1, col=1
+    )
     
-    # VWAPバンド（2σ）
+    # VWAP 2σバンド（薄い色）
     fig.add_trace(
         go.Scatter(
-            x=df['Date'] if 'Date' in df.columns else df.index,
-            y=df['VWAP_Upper_2'],
-            fill=None,
+            x=df['Date'],
+            y=df['VWAP_upper_2sigma'],
             mode='lines',
-            line=dict(width=0),
+            line=dict(color=colors['vwap_2sigma'], width=1, dash='dot'),
+            name="VWAP +2σ",
             showlegend=False
         ),
         row=1, col=1
@@ -276,26 +158,26 @@ def create_advanced_chart(df, timeframe):
     
     fig.add_trace(
         go.Scatter(
-            x=df['Date'] if 'Date' in df.columns else df.index,
-            y=df['VWAP_Lower_2'],
+            x=df['Date'],
+            y=df['VWAP_lower_2sigma'],
+            mode='lines',
+            line=dict(color=colors['vwap_2sigma'], width=1, dash='dot'),
+            name="VWAP -2σ",
             fill='tonexty',
-            mode='lines',
-            line=dict(width=0),
-            fillcolor=colors['band_2'],
-            name='2σ Band',
+            fillcolor=f"rgba(149, 225, 211, 0.1)",
             showlegend=False
         ),
         row=1, col=1
     )
     
-    # VWAPバンド（1σ）
+    # VWAP 1σバンド
     fig.add_trace(
         go.Scatter(
-            x=df['Date'] if 'Date' in df.columns else df.index,
-            y=df['VWAP_Upper_1'],
-            fill=None,
+            x=df['Date'],
+            y=df['VWAP_upper_1sigma'],
             mode='lines',
-            line=dict(width=0),
+            line=dict(color=colors['vwap_1sigma'], width=1.5, dash='dash'),
+            name="VWAP +1σ",
             showlegend=False
         ),
         row=1, col=1
@@ -303,220 +185,217 @@ def create_advanced_chart(df, timeframe):
     
     fig.add_trace(
         go.Scatter(
-            x=df['Date'] if 'Date' in df.columns else df.index,
-            y=df['VWAP_Lower_1'],
+            x=df['Date'],
+            y=df['VWAP_lower_1sigma'],
+            mode='lines',
+            line=dict(color=colors['vwap_1sigma'], width=1.5, dash='dash'),
+            name="VWAP -1σ",
             fill='tonexty',
-            mode='lines',
-            line=dict(width=0),
-            fillcolor=colors['band_1'],
-            name='1σ Band',
+            fillcolor=f"rgba(78, 205, 196, 0.15)",
             showlegend=False
         ),
         row=1, col=1
     )
     
-    # VWAP線
+    # VWAP
     fig.add_trace(
         go.Scatter(
-            x=df['Date'] if 'Date' in df.columns else df.index,
+            x=df['Date'],
             y=df['VWAP'],
             mode='lines',
-            name='VWAP',
             line=dict(color=colors['vwap'], width=2),
+            name="VWAP",
             showlegend=False
         ),
         row=1, col=1
     )
     
-    # ボリューム
+    # 出来高
+    colors_volume = [colors['candle_up'] if close >= open else colors['candle_down'] 
+                    for close, open in zip(df['Close'], df['Open'])]
+    
     fig.add_trace(
         go.Bar(
-            x=df['Date'] if 'Date' in df.columns else df.index,
+            x=df['Date'],
             y=df['Volume'],
-            name='Volume',
-            marker_color=colors['volume'],
+            name="Volume",
+            marker_color=colors_volume,
             opacity=0.7,
             showlegend=False
         ),
         row=2, col=1
     )
     
-    # レイアウト設定（高機能 & おしゃれ）
+    # レイアウト設定
     fig.update_layout(
         title=dict(
-            text=f'<b>株価チャート ({timeframe})</b>',
+            text=f"📈 Stock Price Chart ({timeframe})",
             x=0.5,
-            font=dict(size=24, color='#2c3e50')
+            font=dict(size=24, color='#2E86AB', family="Arial, sans-serif")
         ),
+        xaxis_title="",
+        yaxis_title="Price (¥)",
+        template="plotly_white",
         height=700,
-        showlegend=False,  # 凡例を非表示
+        margin=dict(l=50, r=50, t=80, b=50),
         xaxis_rangeslider_visible=False,
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(family="Helvetica, Arial, sans-serif")
+        showlegend=False,
+        hovermode='x unified',
+        font=dict(family="Arial, sans-serif", size=12, color="#333333")
     )
     
-    # X軸とY軸のスタイル設定
-    fig.update_xaxes(
-        showgrid=True,
-        gridwidth=1,
-        gridcolor='rgba(128,128,128,0.2)',
-        zeroline=False
+    # Y軸の設定
+    fig.update_yaxes(
+        title_text="Price (¥)",
+        title_font=dict(size=14, color='#2E86AB'),
+        gridcolor='rgba(128, 128, 128, 0.2)',
+        row=1, col=1
     )
     
     fig.update_yaxes(
-        showgrid=True,
-        gridwidth=1,
-        gridcolor='rgba(128,128,128,0.2)',
-        zeroline=False
+        title_text="Volume",
+        title_font=dict(size=14, color='#2E86AB'),
+        gridcolor='rgba(128, 128, 128, 0.2)',
+        row=2, col=1
+    )
+    
+    # X軸の設定
+    fig.update_xaxes(
+        gridcolor='rgba(128, 128, 128, 0.2)',
+        title_font=dict(size=14, color='#2E86AB'),
+        row=2, col=1
     )
     
     # インタラクティブ機能の設定
     fig.update_layout(
-        dragmode='zoom',  # ドラッグでズーム
-        scrollZoom=True,  # ホイールでズーム
-        doubleClick='reset',  # ダブルクリックでリセット
-        showTips=True
+        dragmode='pan',  # パン操作を有効
+        scrollZoom=True,  # スクロールズームを有効
+        xaxis=dict(
+            type='date',
+            rangeslider=dict(visible=False),
+            rangeselector=dict(
+                buttons=[
+                    dict(count=7, label="7D", step="day", stepmode="backward"),
+                    dict(count=30, label="30D", step="day", stepmode="backward"),
+                    dict(count=90, label="3M", step="day", stepmode="backward"),
+                    dict(count=180, label="6M", step="day", stepmode="backward"),
+                    dict(step="all", label="All")
+                ],
+                bgcolor='rgba(46, 134, 171, 0.1)',
+                bordercolor='#2E86AB',
+                font=dict(color='#2E86AB')
+            )
+        )
     )
     
     return fig
 
+# メインアプリ
 def main():
-    # ヘッダー
-    st.markdown("""
-    <div class="main-header">
-        <h1>📈 Advanced Stock Analysis Dashboard</h1>
-    </div>
-    """, unsafe_allow_html=True)
+    st.title("📈 Stock Chart Analyzer")
     
     # データ読み込み
     df = load_data()
+    
     if df is None:
-        st.stop()
+        st.error("データファイルが見つかりません。data_j.csvを確認してください。")
+        return
     
     # サイドバー
-    st.sidebar.markdown("## ⚙️ チャート設定")
-    
-    # 時間足選択
-    timeframe = st.sidebar.selectbox(
-        "📊 時間足を選択",
-        ["日足", "週足", "月足", "5分足"],
-        index=0
-    )
-    
-    # 表示期間設定
-    st.sidebar.markdown("### 📅 表示期間")
-    
-    # 期間プリセット
-    period_preset = st.sidebar.selectbox(
-        "期間プリセット",
-        ["カスタム", "1ヶ月", "3ヶ月", "6ヶ月", "1年", "全期間"]
-    )
-    
-    if period_preset != "カスタム":
-        end_date = df['Date'].max()
-        if period_preset == "1ヶ月":
-            start_date = end_date - timedelta(days=30)
-        elif period_preset == "3ヶ月":
-            start_date = end_date - timedelta(days=90)
-        elif period_preset == "6ヶ月":
-            start_date = end_date - timedelta(days=180)
-        elif period_preset == "1年":
-            start_date = end_date - timedelta(days=365)
-        else:  # 全期間
-            start_date = df['Date'].min()
-    else:
-        col1, col2 = st.sidebar.columns(2)
-        with col1:
-            start_date = st.date_input("開始日", df['Date'].min().date())
-        with col2:
-            end_date = st.date_input("終了日", df['Date'].max().date())
+    with st.sidebar:
+        st.header("⚙️ Chart Settings")
         
-        start_date = pd.to_datetime(start_date)
-        end_date = pd.to_datetime(end_date)
-    
-    # データフィルタリング
-    filtered_df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)].copy()
-    
-    if filtered_df.empty:
-        st.error("選択した期間にデータがありません。")
-        st.stop()
-    
-    # 時間足でリサンプリング
-    if timeframe != "日足":
-        filtered_df = resample_data(filtered_df, timeframe)
-    
-    # メトリクス表示
-    col1, col2, col3, col4 = st.columns(4)
-    
-    current_price = filtered_df['Price'].iloc[-1] if 'Price' in filtered_df.columns else filtered_df['Close'].iloc[-1]
-    prev_price = filtered_df['Price'].iloc[-2] if len(filtered_df) > 1 and 'Price' in filtered_df.columns else filtered_df['Close'].iloc[-2] if len(filtered_df) > 1 else current_price
-    price_change = current_price - prev_price
-    price_change_pct = (price_change / prev_price) * 100 if prev_price != 0 else 0
-    
-    with col1:
-        st.metric(
-            label="現在価格",
-            value=f"¥{current_price:,.0f}",
-            delta=f"{price_change:+.0f} ({price_change_pct:+.1f}%)"
+        # 時間軸選択
+        timeframe = st.selectbox(
+            "📊 Time Frame",
+            ["日足", "週足", "月足", "5分足"],
+            index=0,
+            help="チャートの時間軸を選択してください"
         )
-    
-    with col2:
-        high_price = filtered_df['High'].max() if 'High' in filtered_df.columns else filtered_df['Price'].max()
-        st.metric(label="期間最高値", value=f"¥{high_price:,.0f}")
-    
-    with col3:
-        low_price = filtered_df['Low'].min() if 'Low' in filtered_df.columns else filtered_df['Price'].min()
-        st.metric(label="期間最安値", value=f"¥{low_price:,.0f}")
-    
-    with col4:
-        avg_volume = filtered_df['Volume'].mean()
-        st.metric(label="平均出来高", value=f"{avg_volume:,.0f}")
-    
-    # チャート表示
-    st.markdown("## 📊 インタラクティブチャート")
-    st.markdown("""
-    **🖱️ 操作方法:**
-    - **ホイール**: ズームイン・アウト
-    - **ドラッグ**: チャート移動
-    - **ダブルクリック**: ズームリセット
-    - **ボックス選択**: 範囲ズーム
-    """)
-    
-    fig = create_advanced_chart(filtered_df, timeframe)
-    
-    # チャート表示（設定でインタラクティブ機能を有効化）
-    st.plotly_chart(
-        fig, 
-        use_container_width=True,
-        config={
-            'displayModeBar': True,
-            'displaylogo': False,
-            'modeBarButtonsToRemove': [
-                'pan2d', 'lasso2d', 'autoScale2d', 'resetScale2d',
-                'hoverClosestCartesian', 'hoverCompareCartesian'
-            ],
-            'scrollZoom': True,  # ホイールズーム有効
-            'doubleClick': 'reset'  # ダブルクリックでリセット
+        
+        # 期間選択
+        st.subheader("📅 Period")
+        
+        max_date = df['Date'].max()
+        min_date = df['Date'].min()
+        
+        period_options = {
+            "過去1週間": 7,
+            "過去1ヶ月": 30,
+            "過去3ヶ月": 90,
+            "過去6ヶ月": 180,
+            "過去1年": 365,
+            "全期間": None
         }
-    )
-    
-    # データテーブル
-    with st.expander("📋 データテーブル", expanded=False):
-        st.dataframe(
-            filtered_df.tail(50),
-            use_container_width=True,
-            height=300
+        
+        selected_period = st.selectbox(
+            "期間を選択",
+            list(period_options.keys()),
+            index=2
         )
+        
+        if period_options[selected_period]:
+            start_date = max_date - timedelta(days=period_options[selected_period])
+            df_filtered = df[df['Date'] >= start_date].copy()
+        else:
+            df_filtered = df.copy()
+        
+        # 統計情報
+        st.subheader("📊 Statistics")
+        if not df_filtered.empty:
+            latest_price = df_filtered['Close'].iloc[-1]
+            price_change = df_filtered['Close'].iloc[-1] - df_filtered['Close'].iloc[-2] if len(df_filtered) > 1 else 0
+            price_change_pct = (price_change / df_filtered['Close'].iloc[-2] * 100) if len(df_filtered) > 1 else 0
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("💰 Current Price", f"¥{latest_price:,.0f}")
+            with col2:
+                st.metric("📈 Change", f"¥{price_change:,.0f}", f"{price_change_pct:+.2f}%")
+            
+            st.metric("📊 Volume", f"{df_filtered['Volume'].iloc[-1]:,}")
+            st.metric("🎯 VWAP", f"¥{df_filtered['VWAP'].iloc[-1]:,.0f}")
     
-    # フッター
-    st.markdown("---")
-    st.markdown(
-        "<div style='text-align: center; color: #666; font-size: 0.9em;'>"
-        "📈 Advanced Stock Analysis Dashboard | Powered by Streamlit & Plotly"
-        "</div>", 
-        unsafe_allow_html=True
-    )
+    # メインチャート
+    if not df_filtered.empty:
+        # データをリサンプル
+        df_resampled = resample_data(df_filtered, timeframe)
+        
+        if not df_resampled.empty:
+            # チャート作成
+            fig = create_chart(df_resampled, timeframe)
+            
+            # チャート表示
+            config = {
+                'displayModeBar': True,
+                'displaylogo': False,
+                'modeBarButtonsToAdd': ['pan2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d'],
+                'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                'scrollZoom': True
+            }
+            
+            st.plotly_chart(fig, use_container_width=True, config=config)
+            
+            # 使用方法
+            with st.expander("💡 操作方法"):
+                st.markdown("""
+                **📱 チャート操作方法：**
+                - 🖱️ **マウスホイール**: ズームイン/アウト
+                - 🖱️ **ドラッグ**: チャートの移動（パン）
+                - 🎯 **ダブルクリック**: 元の表示に戻る
+                - 📊 **上部ボタン**: 期間選択（7D, 30D, 3M, 6M, All）
+                
+                **📈 チャート要素：**
+                - 🕯️ **ローソク足**: 株価の動き（緑：上昇、赤：下降）
+                - 📊 **VWAP**: オレンジライン（出来高加重平均価格）
+                - 📏 **1σバンド**: 点線（標準偏差1倍）
+                - 📏 **2σバンド**: 薄い帯状エリア（標準偏差2倍）
+                - 📊 **出来高**: 下部の棒グラフ
+                """)
+        else:
+            st.warning("選択した期間にデータがありません。")
+    else:
+        st.warning("選択した期間にデータがありません。")
 
 if __name__ == "__main__":
     main()

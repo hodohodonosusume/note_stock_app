@@ -57,6 +57,8 @@ def load_stock_data():
         df = df[df['market'].isin(['プライム（内国株式）', 'スタンダード（内国株式）', 'グロース（内国株式）'])]
         df['code'] = df['code'].astype(str).str.zfill(4)
         df['ticker'] = df['code'] + '.T'
+        # 選択用の表示名を作成
+        df['display_name'] = df['code'] + ' ' + df['name']
         return df
     except Exception as e:
         st.error(f"データファイルの読み込みエラー: {e}")
@@ -114,7 +116,7 @@ def create_multi_chart(tickers_data, timeframe='1d'):
         shared_xaxes=False,
         vertical_spacing=0.08,
         horizontal_spacing=0.05,
-        subplot_titles=[f"{data['name']} ({data['code']})" for data in tickers_data[:12]]
+        subplot_titles=[f"{data['name'][:10]} ({data['code']})" for data in tickers_data[:12]]
     )
 
     colors = ['#00D4AA', '#FF6B6B', '#FFD93D', '#6A5ACD', '#FF69B4', '#32CD32',
@@ -261,7 +263,7 @@ def main():
     st.markdown("""
     <div class="main-header">
         <h1>📈 日本株マルチチャート</h1>
-        <p>12銘柄同時表示 - プライム・スタンダード・グロース市場対応</p>
+        <p>12銘柄同時表示 - 3802銘柄から自由選択可能</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -294,14 +296,62 @@ def main():
         period, interval = timeframe_options[selected_timeframe]
         
         # 表示銘柄選択方法
+        st.subheader("📊 銘柄選択")
         display_mode = st.radio(
-            "表示方法",
-            ["ウォッチリスト", "人気銘柄", "業種別"]
+            "選択方法",
+            ["手動選択", "ウォッチリスト", "人気銘柄", "業種別"]
         )
         
         selected_tickers = []
         
-        if display_mode == "ウォッチリスト":
+        if display_mode == "手動選択":
+            st.markdown("**🔍 銘柄を検索・選択してください（最大12銘柄）**")
+            
+            # 検索機能
+            search_term = st.text_input(
+                "銘柄検索",
+                placeholder="銘柄名またはコードで検索（例：トヨタ、7203）",
+                help="銘柄名やコードの一部を入力すると候補が絞り込まれます"
+            )
+            
+            # 検索結果をフィルタリング
+            filtered_stocks = stock_df.copy()
+            if search_term:
+                filtered_stocks = stock_df[
+                    stock_df['name'].str.contains(search_term, na=False, case=False) |
+                    stock_df['code'].str.contains(search_term, na=False, case=False)
+                ]
+            
+            # 表示する選択肢を制限（パフォーマンス向上）
+            display_limit = 100 if search_term else 50
+            options_list = filtered_stocks['display_name'].head(display_limit).tolist()
+            
+            # マルチセレクト
+            selected_display_names = st.multiselect(
+                f"銘柄選択 ({len(filtered_stocks)}銘柄中)",
+                options=options_list,
+                default=[],
+                max_selections=12,
+                help="最大12銘柄まで選択できます"
+            )
+            
+            # 選択された銘柄のティッカーを取得
+            if selected_display_names:
+                selected_stocks = stock_df[stock_df['display_name'].isin(selected_display_names)]
+                selected_tickers = selected_stocks['ticker'].tolist()
+                
+                st.success(f"✅ {len(selected_tickers)}銘柄を選択中")
+                
+                # 選択された銘柄の一覧表示
+                with st.expander("選択中の銘柄"):
+                    for _, row in selected_stocks.iterrows():
+                        st.write(f"• {row['code']} {row['name']}")
+            else:
+                st.info("👆 上のボックスから銘柄を選択してください")
+                if not search_term:
+                    st.write("💡 検索ボックスに銘柄名やコードを入力すると見つけやすくなります")
+        
+        elif display_mode == "ウォッチリスト":
             watchlist_names = get_watchlist_names()
             if watchlist_names:
                 selected_watchlist = st.selectbox(
@@ -310,6 +360,7 @@ def main():
                 )
                 if selected_watchlist:
                     selected_tickers = load_watchlist(selected_watchlist)[:12]
+                    st.success(f"✅ {selected_watchlist}から{len(selected_tickers)}銘柄を読み込み")
             else:
                 st.info("ウォッチリストがありません")
         
@@ -321,6 +372,7 @@ def main():
                 '7974.T', '4063.T', '8001.T', '9020.T'   # 任天堂、信越化学、伊藤忠、JR東日本
             ]
             selected_tickers = popular_stocks
+            st.success("✅ 人気銘柄12社を選択")
         
         else:  # 業種別
             sectors = stock_df['sector'].unique()
@@ -331,6 +383,7 @@ def main():
             if selected_sector:
                 sector_stocks = stock_df[stock_df['sector'] == selected_sector]['ticker'].tolist()[:12]
                 selected_tickers = sector_stocks
+                st.success(f"✅ {selected_sector}から{len(selected_tickers)}銘柄を選択")
         
         # ウォッチリスト管理
         st.subheader("⭐ ウォッチリスト管理")
@@ -351,7 +404,7 @@ def main():
                     watchlist_names,
                     key="target_watchlist"
                 )
-                if st.button("現在の12銘柄を追加"):
+                if st.button("現在の銘柄を追加"):
                     save_watchlist(target_watchlist, selected_tickers)
                     st.success(f"'{target_watchlist}'に追加しました")
     
@@ -418,7 +471,25 @@ def main():
             else:
                 st.error("チャートの作成に失敗しました")
     else:
-        st.info("左側から表示方法を選択し、銘柄を選んでください")
+        st.info("👈 左のサイドバーから銘柄を選択してください")
+        
+        # 使い方ガイド
+        st.markdown("""
+        ### 📋 使い方ガイド
+        
+        **1. 手動選択**
+        - 3802銘柄から自由に最大12銘柄を選択
+        - 検索機能で銘柄名・コードから簡単検索
+        
+        **2. ウォッチリスト**
+        - 保存済みのリストから一括選択
+        
+        **3. 人気銘柄**
+        - トヨタ、ソニーなど主要12銘柄を一括選択
+        
+        **4. 業種別**
+        - 選択した業種の銘柄から12銘柄を一括選択
+        """)
     
     # フッター
     st.markdown("---")
@@ -426,3 +497,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

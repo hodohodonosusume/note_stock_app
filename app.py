@@ -154,8 +154,8 @@ def create_multi_chart(selected_stocks_data):
                 low=df['Low'],
                 close=df['Close'],
                 name=stock_data['name'],
-                increasing={'line': {'color': '#00D4AA'}, 'fillcolor': '#00D4AA'},
-                decreasing={'line': {'color': '#FF6B6B'}, 'fillcolor': '#FF6B6B'},
+                decreasing={'line': {'color': '#00D4AA'}, 'fillcolor': '#00D4AA'},
+                increasing={'line': {'color': '#FF6B6B'}, 'fillcolor': '#FF6B6B'},
                 showlegend=False
             ),
             row=row, col=col
@@ -490,3 +490,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -48,8 +48,6 @@ st.markdown("""
 # セッションステート初期化
 if 'selected_stocks' not in st.session_state:
     st.session_state.selected_stocks = []
-if 'chart_period' not in st.session_state:
-    st.session_state.chart_period = {'start': -20, 'end': 0}
 
 @st.cache_data
 def load_stock_data():
@@ -122,8 +120,8 @@ def get_stock_data(ticker, period='3mo', interval='1d'):
         st.error(f"株価データの取得エラー ({ticker}): {e}")
         return None
 
-def create_multi_chart(selected_stocks_data, timeframe='1d', chart_period=None):
-    """12銘柄のマルチチャート作成"""
+def create_multi_chart(selected_stocks_data):
+    """12銘柄のマルチチャート作成（トレーディングビュー風ドラッグ対応）"""
     if not selected_stocks_data or len(selected_stocks_data) == 0:
         return None
 
@@ -136,21 +134,11 @@ def create_multi_chart(selected_stocks_data, timeframe='1d', chart_period=None):
         subplot_titles=[f"{data['name'][:8]}({data['code']})" for data in selected_stocks_data[:12]]
     )
 
-    colors = ['#00D4AA', '#FF6B6B', '#FFD93D', '#6A5ACD', '#FF69B4', '#32CD32',
-              '#FF4500', '#1E90FF', '#DC143C', '#00CED1', '#9370DB', '#FFA500']
-
     for i, stock_data in enumerate(selected_stocks_data[:12]):
         if stock_data['data'] is None or stock_data['data'].empty:
             continue
         
         df = stock_data['data']
-        
-        # 表示期間制限
-        if chart_period:
-            start_idx = max(0, len(df) + chart_period['start'])
-            end_idx = len(df) + chart_period['end'] if chart_period['end'] < 0 else len(df)
-            df = df.iloc[start_idx:end_idx]
-        
         row = (i // 4) + 1
         col = (i % 4) + 1
         
@@ -208,6 +196,8 @@ def create_multi_chart(selected_stocks_data, timeframe='1d', chart_period=None):
                     y=df['vwap_lower_2'],
                     mode='lines',
                     line=dict(color='rgba(255, 107, 107, 0.8)', width=1, dash='dot'),
+                    fill='tonexty',
+                    fillcolor='rgba(255, 107, 107, 0.1)',
                     showlegend=False,
                     hoverinfo='skip'
                 ),
@@ -242,10 +232,10 @@ def create_multi_chart(selected_stocks_data, timeframe='1d', chart_period=None):
                 row=row, col=col
             )
 
-    # レイアウト更新
+    # レイアウト更新（トレーディングビュー風）
     fig.update_layout(
         title=dict(
-            text=f"<b>📈 日本株マルチチャート - {timeframe}</b>",
+            text=f"<b>📈 日本株マルチチャート - 日足 (ドラッグで期間変更)</b>",
             font=dict(size=20, color='#2C3E50'),
             x=0.5
         ),
@@ -255,20 +245,35 @@ def create_multi_chart(selected_stocks_data, timeframe='1d', chart_period=None):
         plot_bgcolor='white',
         font=dict(size=10, family="Arial, sans-serif"),
         margin=dict(l=20, r=20, t=60, b=20),
-        dragmode='pan',
+        dragmode='pan',  # ドラッグでパン可能
         showlegend=False
     )
 
-    # すべてのX軸を category 型に設定
-    fig.update_xaxes(
-        type='category',
-        showgrid=True,
-        gridwidth=0.3,
-        gridcolor='rgba(128,128,128,0.2)',
-        tickangle=45,
-        tickfont=dict(size=8)
-    )
-    
+    # 各サブプロットのX軸設定（トレーディングビュー風）
+    for i in range(1, 13):
+        row = ((i-1) // 4) + 1
+        col = ((i-1) % 4) + 1
+        
+        # 最新20日分を初期表示に設定
+        if selected_stocks_data and len(selected_stocks_data) > i-1 and selected_stocks_data[i-1]['data'] is not None:
+            df = selected_stocks_data[i-1]['data']
+            if not df.empty:
+                total_length = len(df)
+                start_range = max(0, total_length - 20)  # 最新20日分
+                x_values = df.index.strftime('%m/%d').tolist()
+                
+                fig.update_xaxes(
+                    type='category',
+                    range=[start_range, total_length - 1],  # 最新20日分を表示
+                    showgrid=True,
+                    gridwidth=0.3,
+                    gridcolor='rgba(128,128,128,0.2)',
+                    tickangle=45,
+                    tickfont=dict(size=8),
+                    rangeslider_visible=False,
+                    row=row, col=col
+                )
+
     # Y軸の設定
     fig.update_yaxes(
         showgrid=True,
@@ -276,12 +281,6 @@ def create_multi_chart(selected_stocks_data, timeframe='1d', chart_period=None):
         gridcolor='rgba(128,128,128,0.2)',
         tickfont=dict(size=8)
     )
-
-    # レンジスライダー無効化
-    for i in range(1, 13):
-        row = ((i-1) // 4) + 1
-        col = ((i-1) % 4) + 1
-        fig.update_xaxes(rangeslider_visible=False, row=row, col=col)
 
     return fig
 
@@ -312,7 +311,7 @@ def main():
     st.markdown("""
     <div class="main-header">
         <h1>📈 日本株マルチチャート</h1>
-        <p>最大12銘柄同時表示 - 3802銘柄対応</p>
+        <p>最大12銘柄同時表示 - ドラッグで期間変更可能</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -326,40 +325,6 @@ def main():
     # サイドバー
     with st.sidebar:
         st.header("⚙️ 設定")
-        
-        # 時間足設定
-        st.subheader("⏰ 時間足設定")
-        timeframe_options = {
-            '日足': ('3mo', '1d'),
-            '週足': ('6mo', '1wk'),
-            '月足': ('2y', '1mo')
-        }
-        
-        selected_timeframe = st.selectbox(
-            "時間足",
-            options=list(timeframe_options.keys()),
-            index=0
-        )
-        
-        period, interval = timeframe_options[selected_timeframe]
-        
-        # 表示期間制御
-        st.subheader("📅 表示期間")
-        display_days = st.slider("表示する日数", 10, 90, 20)
-        
-        if st.button("最新に戻る"):
-            st.session_state.chart_period = {'start': -display_days, 'end': 0}
-        
-        if st.button("← 前の期間"):
-            st.session_state.chart_period['start'] -= 10
-            st.session_state.chart_period['end'] -= 10
-        
-        if st.button("次の期間 →"):
-            if st.session_state.chart_period['end'] < 0:
-                st.session_state.chart_period['start'] += 10
-                st.session_state.chart_period['end'] += 10
-        
-        st.write(f"現在: {st.session_state.chart_period['start']}日前 ～ {st.session_state.chart_period['end']}日前")
         
         # 選択済み銘柄表示
         st.subheader("📋 選択中の銘柄")
@@ -447,7 +412,10 @@ def main():
     
     # メインエリア
     if st.session_state.selected_stocks:
-        st.subheader(f"📊 マルチチャート - {selected_timeframe} (90日間データ)")
+        st.subheader("📊 マルチチャート - 日足（90日間データ）")
+        
+        # 操作ガイド
+        st.info("💡 **操作方法:** チャートをドラッグして期間移動、マウスホイールで拡大縮小、ダブルクリックでズームリセット")
         
         with st.spinner("チャートを読み込み中..."):
             # 各銘柄のデータを取得
@@ -463,7 +431,7 @@ def main():
                     name = ticker
                     code = ticker.replace('.T', '')
                 
-                stock_data = get_stock_data(ticker, period, interval)
+                stock_data = get_stock_data(ticker, '3mo', '1d')  # 90日分取得
                 
                 selected_stocks_data.append({
                     'ticker': ticker,
@@ -477,11 +445,7 @@ def main():
             progress_bar.empty()
             
             # マルチチャート作成
-            multi_chart = create_multi_chart(
-                selected_stocks_data, 
-                selected_timeframe, 
-                st.session_state.chart_period
-            )
+            multi_chart = create_multi_chart(selected_stocks_data)
             
             if multi_chart:
                 st.plotly_chart(multi_chart, use_container_width=True)
@@ -517,10 +481,11 @@ def main():
     # フッター
     st.markdown("---")
     st.markdown("""
-    💡 **使い方:** 
-    - 左サイドバーで銘柄を検索・選択（最大12銘柄）
-    - 表示期間を変更してチャートを移動
-    - ウォッチリストで銘柄セットを保存・読み込み
+    🎯 **トレーディングビュー風操作:** 
+    - **ドラッグ**: チャートをドラッグして期間を移動
+    - **ズーム**: マウスホイールで拡大縮小
+    - **リセット**: ダブルクリックでズームリセット
+    - **データ範囲**: 90日分のデータを格納、初期表示は最新20日分
     """)
 
 if __name__ == "__main__":

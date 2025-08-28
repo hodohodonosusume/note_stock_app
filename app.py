@@ -126,17 +126,9 @@ def create_chart(df, ticker, name, timeframe='1d'):
             low=df['Low'],
             close=df['Close'],
             name="価格",
-            increasing_line_color='#00D4AA',
-            decreasing_line_color='#FF6B6B',
-            increasing_fillcolor='rgba(0, 212, 170, 0.1)',
-            decreasing_fillcolor='rgba(255, 107, 107, 0.1)',
-            showlegend=False,
-            hovertemplate='<b>%{x}</b><br>' +
-                         '始値: ¥%{open:,.0f}<br>' +
-                         '高値: ¥%{high:,.0f}<br>' +
-                         '安値: ¥%{low:,.0f}<br>' +
-                         '終値: ¥%{close:,.0f}<br>' +
-                         '<extra></extra>'
+            increasing={'line': {'color': '#00D4AA'}, 'fillcolor': '#00D4AA'},
+            decreasing={'line': {'color': '#FF6B6B'}, 'fillcolor': '#FF6B6B'},
+            showlegend=False
         ),
         row=1, col=1
     )
@@ -493,3 +485,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

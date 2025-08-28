@@ -1,325 +1,413 @@
 import streamlit as st
 import pandas as pd
+import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
+import json
+import os
 from datetime import datetime, timedelta
+import time
 
 # ページ設定
 st.set_page_config(
-    page_title="株価分析アプリ", 
-    page_icon="📈", 
-    layout="wide"
+    page_title="日本株リアルタイムチャート",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# タイトル
-st.title("📈 株価分析アプリ")
+# カスタムCSS
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 30px;
+    }
+    .metric-container {
+        background-color: #f0f2f6;
+        padding: 10px;
+        border-radius: 10px;
+        margin: 5px;
+    }
+    .stSelectbox > div > div > select {
+        background-color: #ffffff;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# サイドバーでファイルアップロード
-st.sidebar.header("データ読み込み")
-
-# CSVファイル読み込み
 @st.cache_data
-def load_data():
+def load_stock_data():
+    """株式データを読み込む"""
     try:
         df = pd.read_csv('data_j.csv')
-        df['Date'] = pd.to_datetime(df['Date'])
-        df = df.sort_values('Date')
-        # 休日・空白データを削除
-        df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
-        df = df[df['Volume'] > 0]  # 出来高0のデータも除外
+        # 必要な列を選択してクリーニング
+        df = df[['コード', '銘柄名', '市場・商品区分', '33業種区分']].copy()
+        df = df.rename(columns={
+            'コード': 'code',
+            '銘柄名': 'name',
+            '市場・商品区分': 'market',
+            '33業種区分': 'sector'
+        })
+        # プライム、スタンダード、グロースのみフィルタ
+        df = df[df['market'].isin(['プライム（内国株式）', 'スタンダード（内国株式）', 'グロース（内国株式）'])]
+        # コードを文字列に変換し、4桁に統一
+        df['code'] = df['code'].astype(str).str.zfill(4)
+        df['ticker'] = df['code'] + '.T'
         return df
     except Exception as e:
-        st.error(f"データ読み込みエラー: {e}")
-        return None
+        st.error(f"データファイルの読み込みエラー: {e}")
+        return pd.DataFrame()
 
-# データ読み込み
-df = load_data()
-
-if df is not None:
-    # サイドバーで時間軸選択
-    st.sidebar.header("チャート設定")
-    timeframe = st.sidebar.selectbox(
-        "時間軸を選択",
-        ["日足", "週足", "月足", "5分足"],
-        index=0
-    )
-    
-    # 表示期間選択
-    period_days = st.sidebar.slider("表示期間（日）", 30, len(df), 200)
-    
-    # VWAPバンド設定
-    show_vwap_bands = st.sidebar.checkbox("VWAPバンド表示", True)
-    
-    # データの時間軸変換
-    @st.cache_data
-    def resample_data(df, timeframe):
-        df_resampled = df.copy()
-        df_resampled.set_index('Date', inplace=True)
-        
-        if timeframe == "週足":
-            rule = 'W'
-        elif timeframe == "月足":
-            rule = 'M'
-        elif timeframe == "5分足":
-            # 5分足は元データが日足の場合は意味がないが、デモ用に実装
-            rule = '5T'
-        else:  # 日足
-            rule = 'D'
-        
-        if timeframe != "日足":
-            ohlc_dict = {
-                'Open': 'first',
-                'High': 'max',
-                'Low': 'min',
-                'Close': 'last',
-                'Volume': 'sum'
-            }
-            df_resampled = df_resampled.resample(rule).agg(ohlc_dict)
-            df_resampled = df_resampled.dropna()
-        
-        df_resampled.reset_index(inplace=True)
-        return df_resampled
-    
-    # VWAP計算
-    @st.cache_data
-    def calculate_vwap_with_bands(df):
-        df = df.copy()
-        
-        # Typical Price
-        df['TP'] = (df['High'] + df['Low'] + df['Close']) / 3
-        
-        # Cumulative TP * Volume
-        df['TP_Volume'] = df['TP'] * df['Volume']
-        df['Cumulative_TP_Volume'] = df['TP_Volume'].cumsum()
-        df['Cumulative_Volume'] = df['Volume'].cumsum()
-        
-        # VWAP
-        df['VWAP'] = df['Cumulative_TP_Volume'] / df['Cumulative_Volume']
-        
-        # VWAPからの偏差計算（簡易版）
-        df['Price_VWAP_Diff'] = df['TP'] - df['VWAP']
-        df['Price_VWAP_Diff_Sq'] = df['Price_VWAP_Diff'] ** 2
-        
-        # 移動平均を使った標準偏差の近似
-        window = min(20, len(df))
-        df['VWAP_Std'] = df['Price_VWAP_Diff_Sq'].rolling(window=window).mean() ** 0.5
-        
-        # VWAPバンド
-        df['VWAP_Upper_1std'] = df['VWAP'] + df['VWAP_Std']
-        df['VWAP_Lower_1std'] = df['VWAP'] - df['VWAP_Std']
-        df['VWAP_Upper_2std'] = df['VWAP'] + 2 * df['VWAP_Std']
-        df['VWAP_Lower_2std'] = df['VWAP'] - 2 * df['VWAP_Std']
-        
+def calculate_vwap_bands(df, period=20):
+    """VWAP バンドを計算"""
+    if len(df) < period:
         return df
     
-    # データ処理
-    df_chart = resample_data(df, timeframe)
-    df_chart = calculate_vwap_with_bands(df_chart)
+    # VWAP計算
+    df['vwap'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
     
-    # 表示期間でフィルタ
-    df_display = df_chart.tail(period_days)
+    # VWAPからの偏差
+    df['vwap_dev'] = df['Close'] - df['vwap']
     
-    # チャート作成
+    # 標準偏差計算
+    df['vwap_std'] = df['vwap_dev'].rolling(window=period).std()
+    
+    # バンド計算
+    df['vwap_upper_1'] = df['vwap'] + df['vwap_std']
+    df['vwap_lower_1'] = df['vwap'] - df['vwap_std']
+    df['vwap_upper_2'] = df['vwap'] + 2 * df['vwap_std']
+    df['vwap_lower_2'] = df['vwap'] - 2 * df['vwap_std']
+    
+    return df
+
+@st.cache_data(ttl=300)  # 5分間キャッシュ
+def get_stock_data(ticker, period='1mo'):
+    """株価データを取得"""
+    try:
+        stock = yf.Ticker(ticker)
+        df = stock.history(period=period)
+        if df.empty:
+            return None
+        
+        # VWAPバンド計算
+        df = calculate_vwap_bands(df)
+        return df
+    except Exception as e:
+        st.error(f"株価データの取得エラー ({ticker}): {e}")
+        return None
+
+def create_chart(df, ticker, name):
+    """トレーディングビュー風チャートを作成"""
+    if df is None or df.empty:
+        return None
+    
+    # サブプロットを作成（価格チャートと出来高）
     fig = make_subplots(
         rows=2, cols=1,
         shared_xaxes=True,
         vertical_spacing=0.05,
         row_heights=[0.7, 0.3],
-        subplot_titles=['価格チャート', '出来高']
+        subplot_titles=[f"{name} ({ticker})", "出来高"]
     )
     
     # ローソク足チャート
     fig.add_trace(
         go.Candlestick(
-            x=df_display['Date'],
-            open=df_display['Open'],
-            high=df_display['High'],
-            low=df_display['Low'],
-            close=df_display['Close'],
-            name='価格',
-            showlegend=False,  # 凡例非表示
-            increasing_line_color='#26a69a',
-            decreasing_line_color='#ef5350',
-            increasing_fillcolor='#26a69a',
-            decreasing_fillcolor='#ef5350'
+            x=df.index,
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
+            name="価格",
+            increasing_line_color='#00ff88',
+            decreasing_line_color='#ff4444'
         ),
         row=1, col=1
     )
     
     # VWAP
-    fig.add_trace(
-        go.Scatter(
-            x=df_display['Date'],
-            y=df_display['VWAP'],
-            mode='lines',
-            name='VWAP',
-            line=dict(color='#ff9800', width=2),
-            showlegend=False  # 凡例非表示
-        ),
-        row=1, col=1
-    )
+    if 'vwap' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df['vwap'],
+                mode='lines',
+                name='VWAP',
+                line=dict(color='#ffaa00', width=2)
+            ),
+            row=1, col=1
+        )
+        
+        # VWAPバンド（1σ）
+        if 'vwap_upper_1' in df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=df.index,
+                    y=df['vwap_upper_1'],
+                    mode='lines',
+                    name='VWAP+1σ',
+                    line=dict(color='#888888', width=1, dash='dash'),
+                    showlegend=False
+                ),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=df.index,
+                    y=df['vwap_lower_1'],
+                    mode='lines',
+                    name='VWAP-1σ',
+                    line=dict(color='#888888', width=1, dash='dash'),
+                    fill='tonexty',
+                    fillcolor='rgba(136,136,136,0.1)',
+                    showlegend=False
+                ),
+                row=1, col=1
+            )
+        
+        # VWAPバンド（2σ）
+        if 'vwap_upper_2' in df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=df.index,
+                    y=df['vwap_upper_2'],
+                    mode='lines',
+                    name='VWAP+2σ',
+                    line=dict(color='#cccccc', width=1, dash='dot'),
+                    showlegend=False
+                ),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=df.index,
+                    y=df['vwap_lower_2'],
+                    mode='lines',
+                    name='VWAP-2σ',
+                    line=dict(color='#cccccc', width=1, dash='dot'),
+                    showlegend=False
+                ),
+                row=1, col=1
+            )
     
-    # VWAPバンド
-    if show_vwap_bands:
-        # 2σバンド
-        fig.add_trace(
-            go.Scatter(
-                x=df_display['Date'],
-                y=df_display['VWAP_Upper_2std'],
-                mode='lines',
-                name='VWAP+2σ',
-                line=dict(color='rgba(255, 152, 0, 0.3)', width=1, dash='dot'),
-                showlegend=False
-            ),
-            row=1, col=1
-        )
-        
-        fig.add_trace(
-            go.Scatter(
-                x=df_display['Date'],
-                y=df_display['VWAP_Lower_2std'],
-                mode='lines',
-                name='VWAP-2σ',
-                line=dict(color='rgba(255, 152, 0, 0.3)', width=1, dash='dot'),
-                fill='tonexty',
-                fillcolor='rgba(255, 152, 0, 0.1)',
-                showlegend=False
-            ),
-            row=1, col=1
-        )
-        
-        # 1σバンド
-        fig.add_trace(
-            go.Scatter(
-                x=df_display['Date'],
-                y=df_display['VWAP_Upper_1std'],
-                mode='lines',
-                name='VWAP+1σ',
-                line=dict(color='rgba(255, 152, 0, 0.5)', width=1, dash='dash'),
-                showlegend=False
-            ),
-            row=1, col=1
-        )
-        
-        fig.add_trace(
-            go.Scatter(
-                x=df_display['Date'],
-                y=df_display['VWAP_Lower_1std'],
-                mode='lines',
-                name='VWAP-1σ',
-                line=dict(color='rgba(255, 152, 0, 0.5)', width=1, dash='dash'),
-                fill='tonexty',
-                fillcolor='rgba(255, 152, 0, 0.15)',
-                showlegend=False
-            ),
-            row=1, col=1
-        )
-    
-    # 出来高チャート
-    colors = ['#26a69a' if close >= open else '#ef5350' 
-              for close, open in zip(df_display['Close'], df_display['Open'])]
+    # 出来高
+    colors = ['#ff4444' if df['Close'].iloc[i] < df['Open'].iloc[i] else '#00ff88' 
+              for i in range(len(df))]
     
     fig.add_trace(
         go.Bar(
-            x=df_display['Date'],
-            y=df_display['Volume'],
-            name='出来高',
+            x=df.index,
+            y=df['Volume'],
+            name="出来高",
             marker_color=colors,
             showlegend=False
         ),
         row=2, col=1
     )
     
-    # レイアウト設定（おしゃれ＆機能的）
+    # レイアウト更新
     fig.update_layout(
-        title=dict(
-            text=f'{timeframe}チャート',
-            x=0.5,
-            font=dict(size=24, color='#2c3e50')
-        ),
-        xaxis_rangeslider_visible=False,  # レンジスライダー非表示
-        height=700,
-        plot_bgcolor='white',
-        paper_bgcolor='#f8f9fa',
-        font=dict(color='#2c3e50'),
-        margin=dict(l=50, r=50, t=80, b=50),
-        # ホバー時の十字線
-        hovermode='x unified',
+        title="",
+        xaxis_rangeslider_visible=False,
+        height=400,
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(size=10),
+        margin=dict(l=10, r=10, t=30, b=10)
     )
     
-    # X軸設定
-    fig.update_xaxes(
-        showgrid=True,
-        gridwidth=1,
-        gridcolor='rgba(128, 128, 128, 0.2)',
-        showline=True,
-        linewidth=1,
-        linecolor='#bdc3c7'
-    )
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.3)')
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.3)')
     
-    # Y軸設定
-    fig.update_yaxes(
-        showgrid=True,
-        gridwidth=1,
-        gridcolor='rgba(128, 128, 128, 0.2)',
-        showline=True,
-        linewidth=1,
-        linecolor='#bdc3c7'
-    )
+    return fig
+
+def save_watchlist(name, tickers):
+    """ウォッチリストを保存"""
+    if not os.path.exists('watchlists'):
+        os.makedirs('watchlists')
     
-    # インタラクティブ機能設定
-    config = {
-        'scrollZoom': True,  # ホイールでズーム
-        'displayModeBar': True,
-        'displaylogo': False,
-        'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
-        'toImageButtonOptions': {
-            'format': 'png',
-            'filename': 'stock_chart',
-            'height': 700,
-            'width': 1200,
-            'scale': 2
-        }
-    }
+    with open(f'watchlists/{name}.json', 'w', encoding='utf-8') as f:
+        json.dump(tickers, f, ensure_ascii=False, indent=2)
+
+def load_watchlist(name):
+    """ウォッチリストを読み込み"""
+    try:
+        with open(f'watchlists/{name}.json', 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except:
+        return []
+
+def get_watchlist_names():
+    """保存されたウォッチリスト名を取得"""
+    if not os.path.exists('watchlists'):
+        return []
+    
+    files = [f[:-5] for f in os.listdir('watchlists') if f.endswith('.json')]
+    return files
+
+def main():
+    # ヘッダー
+    st.markdown('<h1 class="main-header">📈 日本株リアルタイムチャート</h1>', unsafe_allow_html=True)
+    
+    # データ読み込み
+    stock_df = load_stock_data()
+    if stock_df.empty:
+        st.error("データファイルが見つかりません。data_j.xlsファイルをアップロードしてください。")
+        return
+    
+    # サイドバー
+    st.sidebar.header("銘柄選択")
+    
+    # ウォッチリスト機能
+    st.sidebar.subheader("ウォッチリスト")
+    watchlist_names = get_watchlist_names()
+    
+    # ウォッチリスト選択
+    if watchlist_names:
+        selected_watchlist = st.sidebar.selectbox("保存済みリスト", ["選択してください"] + watchlist_names)
+        if selected_watchlist != "選択してください":
+            if st.sidebar.button("リスト読み込み"):
+                st.session_state.selected_tickers = load_watchlist(selected_watchlist)
+                st.rerun()
+    
+    # 銘柄選択
+    search_method = st.sidebar.radio("検索方法", ["銘柄名", "銘柄コード", "業種", "市場"])
+    
+    if 'selected_tickers' not in st.session_state:
+        st.session_state.selected_tickers = []
+    
+    if search_method == "銘柄名":
+        companies = stock_df['name'].unique()
+        selected_company = st.sidebar.selectbox("銘柄名で選択", ["選択してください"] + sorted(companies))
+        if selected_company != "選択してください":
+            ticker_info = stock_df[stock_df['name'] == selected_company].iloc[0]
+            ticker = ticker_info['ticker']
+    
+    elif search_method == "銘柄コード":
+        code = st.sidebar.text_input("銘柄コード（4桁）", placeholder="例: 7203")
+        if code and len(code) == 4:
+            ticker_info = stock_df[stock_df['code'] == code]
+            if not ticker_info.empty:
+                ticker = ticker_info.iloc[0]['ticker']
+                selected_company = ticker_info.iloc[0]['name']
+            else:
+                st.sidebar.error("該当する銘柄が見つかりません")
+                ticker = None
+        else:
+            ticker = None
+    
+    elif search_method == "業種":
+        sectors = stock_df['sector'].unique()
+        selected_sector = st.sidebar.selectbox("業種で選択", ["選択してください"] + sorted([s for s in sectors if pd.notna(s)]))
+        if selected_sector != "選択してください":
+            sector_companies = stock_df[stock_df['sector'] == selected_sector]['name'].tolist()
+            selected_company = st.sidebar.selectbox("銘柄選択", ["選択してください"] + sorted(sector_companies))
+            if selected_company != "選択してください":
+                ticker_info = stock_df[stock_df['name'] == selected_company].iloc[0]
+                ticker = ticker_info['ticker']
+        else:
+            ticker = None
+    
+    elif search_method == "市場":
+        markets = stock_df['market'].unique()
+        selected_market = st.sidebar.selectbox("市場で選択", ["選択してください"] + sorted(markets))
+        if selected_market != "選択してください":
+            market_companies = stock_df[stock_df['market'] == selected_market]['name'].tolist()
+            selected_company = st.sidebar.selectbox("銘柄選択", ["選択してください"] + sorted(market_companies))
+            if selected_company != "選択してください":
+                ticker_info = stock_df[stock_df['name'] == selected_company].iloc[0]
+                ticker = ticker_info['ticker']
+        else:
+            ticker = None
+    
+    # 銘柄追加
+    if st.sidebar.button("銘柄を追加") and 'ticker' in locals() and ticker:
+        if ticker not in st.session_state.selected_tickers and len(st.session_state.selected_tickers) < 12:
+            st.session_state.selected_tickers.append(ticker)
+            st.rerun()
+        elif len(st.session_state.selected_tickers) >= 12:
+            st.sidebar.warning("最大12銘柄まで選択できます")
+    
+    # 選択された銘柄表示
+    if st.session_state.selected_tickers:
+        st.sidebar.subheader("選択中の銘柄")
+        for i, ticker in enumerate(st.session_state.selected_tickers):
+            stock_info = stock_df[stock_df['ticker'] == ticker]
+            if not stock_info.empty:
+                name = stock_info.iloc[0]['name']
+                col1, col2 = st.sidebar.columns([3, 1])
+                col1.write(f"{name} ({ticker[:-2]})")
+                if col2.button("削除", key=f"del_{i}"):
+                    st.session_state.selected_tickers.remove(ticker)
+                    st.rerun()
+    
+    # ウォッチリスト保存
+    st.sidebar.subheader("リスト保存")
+    watchlist_name = st.sidebar.text_input("リスト名", placeholder="例: 注目銘柄")
+    if st.sidebar.button("保存") and watchlist_name and st.session_state.selected_tickers:
+        save_watchlist(watchlist_name, st.session_state.selected_tickers)
+        st.sidebar.success("保存しました！")
+    
+    # 全削除ボタン
+    if st.sidebar.button("全銘柄削除"):
+        st.session_state.selected_tickers = []
+        st.rerun()
+    
+    # メインエリア
+    if not st.session_state.selected_tickers:
+        st.info("サイドバーから銘柄を選択してください（最大12銘柄）")
+        return
     
     # チャート表示
-    st.plotly_chart(fig, use_container_width=True, config=config)
+    st.subheader(f"選択銘柄: {len(st.session_state.selected_tickers)}/12")
     
-    # 操作方法の説明
-    st.info("""
-    **📊 チャート操作方法:**
-    - **ズーム**: マウスホイールでズームイン/アウト
-    - **パン**: ドラッグで移動
-    - **期間選択**: チャート上でドラッグして範囲選択
-    - **リセット**: ダブルクリックで元の表示範囲に戻る
-    """)
+    # 4列×3行のレイアウト
+    rows = 3
+    cols = 4
     
-    # 統計情報表示
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("現在価格", f"¥{df_display['Close'].iloc[-1]:,.0f}")
-    
-    with col2:
-        price_change = df_display['Close'].iloc[-1] - df_display['Close'].iloc[-2]
-        price_change_pct = (price_change / df_display['Close'].iloc[-2]) * 100
-        st.metric("前日比", f"¥{price_change:+,.0f}", f"{price_change_pct:+.2f}%")
-    
-    with col3:
-        st.metric("VWAP", f"¥{df_display['VWAP'].iloc[-1]:,.0f}")
-    
-    with col4:
-        avg_volume = df_display['Volume'].tail(20).mean()
-        st.metric("平均出来高(20日)", f"{avg_volume:,.0f}")
+    for row in range(rows):
+        columns = st.columns(cols)
+        for col in range(cols):
+            idx = row * cols + col
+            if idx < len(st.session_state.selected_tickers):
+                ticker = st.session_state.selected_tickers[idx]
+                stock_info = stock_df[stock_df['ticker'] == ticker]
+                
+                if not stock_info.empty:
+                    name = stock_info.iloc[0]['name']
+                    
+                    # 株価データ取得
+                    with columns[col]:
+                        with st.spinner(f"データ取得中... {name}"):
+                            df = get_stock_data(ticker)
+                            if df is not None:
+                                fig = create_chart(df, ticker[:-2], name)
+                                if fig:
+                                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                                    
+                                    # 最新価格表示
+                                    current_price = df['Close'].iloc[-1]
+                                    prev_price = df['Close'].iloc[-2] if len(df) > 1 else current_price
+                                    change = current_price - prev_price
+                                    change_pct = (change / prev_price) * 100 if prev_price != 0 else 0
+                                    
+                                    color = "green" if change >= 0 else "red"
+                                    st.markdown(f"""
+                                    <div style="text-align: center; padding: 5px;">
+                                        <span style="font-size: 16px; font-weight: bold;">¥{current_price:,.0f}</span><br>
+                                        <span style="color: {color}; font-size: 12px;">
+                                            {change:+.0f} ({change_pct:+.1f}%)
+                                        </span>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                            else:
+                                st.error(f"データ取得エラー: {name}")
 
-else:
-    st.error("データファイル 'data_j.csv' が見つかりません。ファイルをアップロードしてください。")
-    
-    # ファイルアップロード機能
-    uploaded_file = st.file_uploader("CSVファイルをアップロード", type=['csv'])
-    if uploaded_file is not None:
-        df_uploaded = pd.read_csv(uploaded_file)
-        st.success("ファイルがアップロードされました！")
-        st.dataframe(df_uploaded.head())
+if __name__ == "__main__":
+    main()
 

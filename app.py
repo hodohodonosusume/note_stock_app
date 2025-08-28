@@ -47,16 +47,116 @@ st.markdown("""
 
 @st.cache_data
 def load_data():
-    """CSVデータを読み込み"""
+    """CSVデータを読み込み（自動カラム検出付き）"""
     try:
+        # CSVファイルを読み込み
         df = pd.read_csv('data_j.csv', encoding='utf-8')
-        df['Date'] = pd.to_datetime(df['Date'])
+        
+        # デバッグ情報を表示
+        st.sidebar.markdown("### 📋 CSVファイル情報")
+        st.sidebar.write(f"**カラム数**: {len(df.columns)}")
+        st.sidebar.write(f"**行数**: {len(df)}")
+        st.sidebar.write("**カラム名**:")
+        for i, col in enumerate(df.columns):
+            st.sidebar.write(f"{i+1}. `{col}`")
+        
+        # 日付カラムを自動検出
+        date_column = None
+        possible_date_names = ['Date', 'date', 'DATE', '日付', 'Timestamp', 'timestamp', 'Time', 'time']
+        
+        for col in df.columns:
+            if col in possible_date_names:
+                date_column = col
+                break
+        
+        # 日付カラムが見つからない場合、最初のカラムを使用
+        if date_column is None:
+            date_column = df.columns
+            st.warning(f"日付カラムが見つかりません。'{date_column}'を日付として使用します。")
+        
+        # 日付カラムを変換
+        try:
+            df[date_column] = pd.to_datetime(df[date_column])
+        except:
+            st.error(f"'{date_column}'カラムを日付に変換できませんでした。")
+            return None
+        
+        # 標準カラム名にリネーム
+        df = df.rename(columns={date_column: 'Date'})
+        
+        # 価格カラムを自動検出
+        price_column = None
+        possible_price_names = ['Price', 'price', 'PRICE', '価格', 'Close', 'close', 'CLOSE', '終値']
+        
+        for col in df.columns:
+            if col in possible_price_names:
+                price_column = col
+                break
+        
+        if price_column is None:
+            # 数値カラムから最初のものを選択
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) > 0:
+                price_column = numeric_cols
+                st.warning(f"価格カラムが見つかりません。'{price_column}'を価格として使用します。")
+            else:
+                st.error("数値カラムが見つかりません。")
+                return None
+        
+        # 標準カラム名にリネーム
+        if price_column != 'Price':
+            df = df.rename(columns={price_column: 'Price'})
+        
+        # ボリュームカラムを自動検出（オプション）
+        volume_column = None
+        possible_volume_names = ['Volume', 'volume', 'VOLUME', '出来高', 'Vol', 'vol']
+        
+        for col in df.columns:
+            if col in possible_volume_names:
+                volume_column = col
+                break
+        
+        if volume_column is None:
+            # ボリュームがない場合はダミーデータを作成
+            df['Volume'] = 1000000  # 固定値
+            st.info("出来高カラムが見つかりません。固定値を使用します。")
+        else:
+            df = df.rename(columns={volume_column: 'Volume'})
+        
+        # VWAPカラムを自動検出（オプション）
+        vwap_column = None
+        possible_vwap_names = ['VWAP', 'vwap', 'Vwap']
+        
+        for col in df.columns:
+            if col in possible_vwap_names:
+                vwap_column = col
+                break
+        
+        if vwap_column is None:
+            # VWAPがない場合は価格をベースに計算
+            df['VWAP'] = df['Price']
+            st.info("VWAPカラムが見つかりません。価格をベースに使用します。")
+        else:
+            df = df.rename(columns={vwap_column: 'VWAP'})
+        
         # 休日・土日を除外してデータを詰める
         df = df.dropna(subset=['Price'])  # 価格がNaNの行を削除
         df = df.reset_index(drop=True)
+        
+        st.sidebar.success("✅ データ読み込み完了!")
         return df
+        
+    except FileNotFoundError:
+        st.error("❌ data_j.csvファイルが見つかりません。GitHubリポジトリにファイルがアップロードされているか確認してください。")
+        return None
     except Exception as e:
-        st.error(f"データ読み込みエラー: {e}")
+        st.error(f"❌ データ読み込みエラー: {str(e)}")
+        st.markdown("### 🔍 トラブルシューティング")
+        st.markdown("""
+        1. **ファイル名を確認**: `data_j.csv`が正しい名前か確認
+        2. **エンコーディングを変更**: CSVファイルがUTF-8で保存されているか確認
+        3. **カラム名を確認**: 日付、価格、出来高のカラム名を確認
+        """)
         return None
 
 def resample_data(df, timeframe):

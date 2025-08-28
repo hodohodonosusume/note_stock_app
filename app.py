@@ -43,7 +43,7 @@ st.markdown("""
 def load_stock_data():
     """株式データを読み込む"""
     try:
-        df = pd.read_excel('data_j.xls')
+        df = pd.read_csv('data_j.csv')
         # 必要な列を選択してクリーニング
         df = df[['コード', '銘柄名', '市場・商品区分', '33業種区分']].copy()
         df = df.rename(columns={
@@ -410,3 +410,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
